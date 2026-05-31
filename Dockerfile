@@ -1,10 +1,10 @@
-FROM node:24 AS build
+FROM node:26 AS build
 WORKDIR /app
 COPY . .
 RUN set -xe \
     && npm install --omit=dev
 
-FROM node:24-slim AS runner
+FROM node:26-slim AS runner
 WORKDIR /app
 COPY --from=build /app .
 RUN set -xe \
