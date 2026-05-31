@@ -8,11 +8,9 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 
-// Start tracker loop (every 30 minutes by default)
 const interval = process.env.UPDATE_INTERVAL_MINUTES || 30;
 tracker.startTracking(interval);
 
-// API Routes
 app.use("/", routes);
 
 app.listen(port, () => {

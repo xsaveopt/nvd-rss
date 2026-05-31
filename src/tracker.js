@@ -2,13 +2,12 @@ const zlib = require("zlib");
 const { promisify } = require("util");
 const gunzip = promisify(zlib.gunzip);
 
-// Default to NVD 2.0 Recent feed
 const FEED_URL =
   process.env.NVD_FEED_URL ||
   "https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-recent.json.gz";
 
 const CVSS_THRESHOLD = parseFloat(process.env.CVSS_THRESHOLD || "8.0");
-const PRODUCT_FILTER = process.env.PRODUCT_FILTER || null; // e.g., "chrome" or "windows"
+const PRODUCT_FILTER = process.env.PRODUCT_FILTER || null;
 
 let currentRSS = "";
 
@@ -35,7 +34,6 @@ function getHighestCvssScore(cveItem) {
 
   if (!cveItem.metrics) return 0.0;
 
-  // Check CVSS 3.1
   if (cveItem.metrics.cvssMetricV31) {
     for (const metric of cveItem.metrics.cvssMetricV31) {
       if (metric.cvssData && metric.cvssData.baseScore > maxScore) {
@@ -44,7 +42,6 @@ function getHighestCvssScore(cveItem) {
     }
   }
 
-  // Check CVSS 3.0
   if (cveItem.metrics.cvssMetricV30) {
     for (const metric of cveItem.metrics.cvssMetricV30) {
       if (metric.cvssData && metric.cvssData.baseScore > maxScore) {
@@ -53,7 +50,6 @@ function getHighestCvssScore(cveItem) {
     }
   }
 
-  // Check CVSS 2.0
   if (cveItem.metrics.cvssMetricV2) {
     for (const metric of cveItem.metrics.cvssMetricV2) {
       if (metric.cvssData && metric.cvssData.baseScore > maxScore) {
@@ -68,8 +64,6 @@ function getHighestCvssScore(cveItem) {
 function matchesProductFilter(cveItem, filter) {
   if (!filter) return true;
 
-  // NVD 2.0 stores configurations in 'configurations'
-  // We need to look for cpeMatch strings
   if (!cveItem.configurations) return false;
 
   const filterLower = filter.toLowerCase();
@@ -96,22 +90,18 @@ function matchesProductFilter(cveItem, filter) {
 function getProducts(cveItem, description) {
   const candidates = [];
 
-  // 1. Description Heuristics (Highest priority for readability)
   if (description) {
     const patterns = [
       /The\s+(.+?)\s+plugin\s+for\s+WordPress/i,
       /The\s+(.+?)\s+theme\s+for\s+WordPress/i,
-      /^(.+?)\s+developed\s+by/i, // "IAQS and I6 developed by JNC..."
-      /\bvulnerability in\s+(?:the\s+)?(.+?)(?:\s+(?:allows|version|before|prior|is|has)|\.|$)/i, // "vulnerability in Nelio Software..."
+      /^(.+?)\s+developed\s+by/i,
+      /\bvulnerability in\s+(?:the\s+)?(.+?)(?:\s+(?:allows|version|before|prior|is|has)|\.|$)/i,
     ];
 
     for (const pattern of patterns) {
       const match = description.match(pattern);
       if (match && match[1]) {
-        // Clean up the match
         let p = match[1].trim();
-        // Heuristic: if it's too long, it might have captured garbage
-        // or if it contains certain vulnerability keywords, exclude it
         if (p.length < 50 && !p.toLowerCase().includes("vulnerability")) {
           candidates.push(p);
         }
@@ -119,22 +109,19 @@ function getProducts(cveItem, description) {
     }
   }
 
-  // 2. GitHub References
   if (cveItem.references) {
     for (const ref of cveItem.references) {
       if (ref.url && ref.url.includes("github.com")) {
         try {
-          // Basic parsing to avoid URL object issues if any
           const match = ref.url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
           if (match && match[2]) {
-            candidates.push(match[2]); // Repo name
+            candidates.push(match[2]);
           }
         } catch (e) {}
       }
     }
   }
 
-  // 3. CPEs (Fallback)
   if (cveItem.configurations) {
     for (const config of cveItem.configurations) {
       if (config.nodes) {
@@ -142,11 +129,9 @@ function getProducts(cveItem, description) {
           if (node.cpeMatch) {
             for (const match of node.cpeMatch) {
               if (match.criteria) {
-                // cpe:2.3:a:vendor:product:version...
                 const parts = match.criteria.split(":");
                 if (parts.length >= 5) {
                   const product = parts[4];
-                  // Format: "windows_10" -> "Windows 10"
                   const formatted = product
                     .replace(/_/g, " ")
                     .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -160,13 +145,8 @@ function getProducts(cveItem, description) {
     }
   }
 
-  // Deduplicate and priorize
-  // We prefer the description/github matches (at the top of candidates)
-  // but if we have multiple, just take the first unique non-generic ones
-
   const unique = [...new Set(candidates)];
 
-  // Filter out very generic terms if we have specific ones
   const filtered = unique.filter((p) => {
     const lower = p.toLowerCase();
     return lower !== "linux kernel" && lower !== "unknown";
@@ -181,13 +161,10 @@ function getProducts(cveItem, description) {
 function getSource(cveItem) {
   if (cveItem.sourceIdentifier) {
     let src = cveItem.sourceIdentifier;
-    // Remove email part if present (e.g. security@wordfence.com -> wordfence.com)
     if (src.includes("@")) {
       const parts = src.split("@");
       src = parts[1] || src;
     }
-    // Remove TLD if likely generic (e.g. wordfence.com -> wordfence)
-    // This is heuristic and might be too aggressive for some, but fine for typical vendors
     const parts = src.split(".");
     if (parts.length >= 2) {
       src = parts[0];
@@ -208,7 +185,6 @@ async function fetchAndParseFeed() {
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // NVD Feeds are Gzipped
     const jsonStr = await gunzip(buffer);
     const json = JSON.parse(jsonStr.toString());
 
@@ -238,10 +214,8 @@ async function updateFeed() {
 
       const score = getHighestCvssScore(cve);
 
-      // Filter by CVSS Score
       if (score < CVSS_THRESHOLD) return null;
 
-      // Filter by Product
       if (PRODUCT_FILTER && !matchesProductFilter(cve, PRODUCT_FILTER))
         return null;
 
@@ -250,15 +224,13 @@ async function updateFeed() {
         ? new Date(cve.published).toUTCString()
         : now;
 
-      // Get description
       const descObj =
         cve.descriptions && cve.descriptions.find((d) => d.lang === "en");
-      const description = descObj.value || "No description available"; // correctly access value or fallback
+      const description = descObj.value || "No description available";
 
       const safeDescription = escapeXml(description);
       const source = getSource(cve);
 
-      // Title: CVE (Score) – Description
       const title = `${cveId} (CVSS ${score}) – ${description.substring(0, 50)}${description.length > 50 ? "..." : ""}`;
 
       return `  <item>
@@ -270,7 +242,7 @@ async function updateFeed() {
     <pubDate>${pubDate}</pubDate>
   </item>`;
     })
-    .filter(Boolean) // Remove nulls
+    .filter(Boolean)
     .join("\n");
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -292,7 +264,7 @@ ${items}
 }
 
 function startTracking(intervalMinutes) {
-  updateFeed(); // Initial run
+  updateFeed();
   setInterval(updateFeed, intervalMinutes * 60 * 1000);
 }
 
