@@ -1,16 +1,16 @@
-const express = require("express");
+import express from "express";
+import type { Request, Response } from "express";
+import { getRSS } from "./tracker.ts";
+
 const router = express.Router();
-const tracker = require("./tracker");
 
 const rssPath = process.env.RSS_PATH || "/rss";
 
-router.get(rssPath, (req, res) => {
+router.get(rssPath, (_req: Request, res: Response) => {
   try {
-    const xml = tracker.getRSS();
+    const xml = getRSS();
     if (!xml) {
-      res
-        .status(503)
-        .send("RSS feed not ready yet. Please try again in a moment.");
+      res.status(503).send("RSS feed not ready yet. Please try again in a moment.");
       return;
     }
     res.set("Content-Type", "application/rss+xml");
@@ -21,4 +21,4 @@ router.get(rssPath, (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

@@ -1,16 +1,29 @@
 {
   "name": "nvd-rss",
   "version": "1.0.0",
-  "main": "src/server.js",
+  "type": "module",
+  "main": "src/server.ts",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node src/server.ts",
+    "dev": "node --watch src/server.ts",
+    "test": "node --test 'test/**/*.test.ts'",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "typecheck": "tsc"
   },
   "dependencies": {
-    "express": "^5.2.1",
-    "cors": "^2.8.5"
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
   },
-  "volta": {
-    "node": "24.13.0"
-  }
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.1",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@11.12.0"
 }

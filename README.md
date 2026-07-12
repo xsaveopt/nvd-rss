@@ -20,14 +20,14 @@ The application is configured using environment variables.
 ### Local Development
 
 ```bash
-npm install
-npm start
+pnpm install
+pnpm start
 ```
 
 ### With Configuration
 
 ```bash
-CVSS_THRESHOLD=9.0 PRODUCT_FILTER="windows" npm start
+CVSS_THRESHOLD=9.0 PRODUCT_FILTER="windows" pnpm start
 ```
 
 ### Docker

@@ -1,19 +1,54 @@
-const zlib = require("zlib");
-const { promisify } = require("util");
+import zlib from "node:zlib";
+import { promisify } from "node:util";
+
 const gunzip = promisify(zlib.gunzip);
 
-const FEED_URL =
-  process.env.NVD_FEED_URL ||
-  "https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-recent.json.gz";
+export const FEED_URL =
+  process.env.NVD_FEED_URL || "https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-recent.json.gz";
 
-const CVSS_THRESHOLD = parseFloat(process.env.CVSS_THRESHOLD || "8.0");
+const CVSS_THRESHOLD = Number.parseFloat(process.env.CVSS_THRESHOLD || "8.0");
 const PRODUCT_FILTER = process.env.PRODUCT_FILTER || null;
+
+interface CvssMetric {
+  cvssData?: { baseScore?: number };
+}
+
+interface CpeMatch {
+  criteria?: string;
+}
+
+interface ConfigNode {
+  cpeMatch?: CpeMatch[];
+}
+
+interface Configuration {
+  nodes?: ConfigNode[];
+}
+
+interface CveItem {
+  id: string;
+  published?: string;
+  sourceIdentifier?: string;
+  descriptions?: { lang: string; value: string }[];
+  references?: { url?: string }[];
+  configurations?: Configuration[];
+  metrics?: {
+    cvssMetricV31?: CvssMetric[];
+    cvssMetricV30?: CvssMetric[];
+    cvssMetricV2?: CvssMetric[];
+  };
+}
+
+interface NvdFeed {
+  timestamp?: string;
+  vulnerabilities?: { cve?: CveItem }[];
+}
 
 let currentRSS = "";
 
-function escapeXml(unsafe) {
+function escapeXml(unsafe: string | undefined): string {
   if (!unsafe) return "";
-  return unsafe.replace(/[<>&'"]/g, function (c) {
+  return unsafe.replace(/[<>&'"]/g, (c) => {
     switch (c) {
       case "<":
         return "&lt;";
@@ -25,35 +60,29 @@ function escapeXml(unsafe) {
         return "&apos;";
       case '"':
         return "&quot;";
+      default:
+        return c;
     }
   });
 }
 
-function getHighestCvssScore(cveItem) {
+function getHighestCvssScore(cveItem: CveItem): number {
   let maxScore = 0.0;
 
   if (!cveItem.metrics) return 0.0;
 
-  if (cveItem.metrics.cvssMetricV31) {
-    for (const metric of cveItem.metrics.cvssMetricV31) {
-      if (metric.cvssData && metric.cvssData.baseScore > maxScore) {
-        maxScore = metric.cvssData.baseScore;
-      }
-    }
-  }
+  const groups = [
+    cveItem.metrics.cvssMetricV31,
+    cveItem.metrics.cvssMetricV30,
+    cveItem.metrics.cvssMetricV2,
+  ];
 
-  if (cveItem.metrics.cvssMetricV30) {
-    for (const metric of cveItem.metrics.cvssMetricV30) {
-      if (metric.cvssData && metric.cvssData.baseScore > maxScore) {
-        maxScore = metric.cvssData.baseScore;
-      }
-    }
-  }
-
-  if (cveItem.metrics.cvssMetricV2) {
-    for (const metric of cveItem.metrics.cvssMetricV2) {
-      if (metric.cvssData && metric.cvssData.baseScore > maxScore) {
-        maxScore = metric.cvssData.baseScore;
+  for (const group of groups) {
+    if (!group) continue;
+    for (const metric of group) {
+      const score = metric.cvssData?.baseScore;
+      if (score !== undefined && score > maxScore) {
+        maxScore = score;
       }
     }
   }
@@ -61,25 +90,18 @@ function getHighestCvssScore(cveItem) {
   return maxScore;
 }
 
-function matchesProductFilter(cveItem, filter) {
-  if (!filter) return true;
-
+function matchesProductFilter(cveItem: CveItem, filter: string): boolean {
   if (!cveItem.configurations) return false;
 
   const filterLower = filter.toLowerCase();
 
   for (const config of cveItem.configurations) {
-    if (config.nodes) {
-      for (const node of config.nodes) {
-        if (node.cpeMatch) {
-          for (const match of node.cpeMatch) {
-            if (
-              match.criteria &&
-              match.criteria.toLowerCase().includes(filterLower)
-            ) {
-              return true;
-            }
-          }
+    if (!config.nodes) continue;
+    for (const node of config.nodes) {
+      if (!node.cpeMatch) continue;
+      for (const match of node.cpeMatch) {
+        if (match.criteria && match.criteria.toLowerCase().includes(filterLower)) {
+          return true;
         }
       }
     }
@@ -87,8 +109,8 @@ function matchesProductFilter(cveItem, filter) {
   return false;
 }
 
-function getProducts(cveItem, description) {
-  const candidates = [];
+function getProducts(cveItem: CveItem, description: string): string {
+  const candidates: string[] = [];
 
   if (description) {
     const patterns = [
@@ -101,7 +123,7 @@ function getProducts(cveItem, description) {
     for (const pattern of patterns) {
       const match = description.match(pattern);
       if (match && match[1]) {
-        let p = match[1].trim();
+        const p = match[1].trim();
         if (p.length < 50 && !p.toLowerCase().includes("vulnerability")) {
           candidates.push(p);
         }
@@ -112,32 +134,26 @@ function getProducts(cveItem, description) {
   if (cveItem.references) {
     for (const ref of cveItem.references) {
       if (ref.url && ref.url.includes("github.com")) {
-        try {
-          const match = ref.url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-          if (match && match[2]) {
-            candidates.push(match[2]);
-          }
-        } catch (e) {}
+        const match = ref.url.match(/github\.com\/([^/]+)\/([^/]+)/);
+        if (match && match[2]) {
+          candidates.push(match[2]);
+        }
       }
     }
   }
 
   if (cveItem.configurations) {
     for (const config of cveItem.configurations) {
-      if (config.nodes) {
-        for (const node of config.nodes) {
-          if (node.cpeMatch) {
-            for (const match of node.cpeMatch) {
-              if (match.criteria) {
-                const parts = match.criteria.split(":");
-                if (parts.length >= 5) {
-                  const product = parts[4];
-                  const formatted = product
-                    .replace(/_/g, " ")
-                    .replace(/\b\w/g, (c) => c.toUpperCase());
-                  candidates.push(formatted);
-                }
-              }
+      if (!config.nodes) continue;
+      for (const node of config.nodes) {
+        if (!node.cpeMatch) continue;
+        for (const match of node.cpeMatch) {
+          if (match.criteria) {
+            const parts = match.criteria.split(":");
+            if (parts.length >= 5) {
+              const product = parts[4];
+              const formatted = product.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+              candidates.push(formatted);
             }
           }
         }
@@ -158,7 +174,7 @@ function getProducts(cveItem, description) {
   return final.slice(0, 2).join(", ");
 }
 
-function getSource(cveItem) {
+function getSource(cveItem: CveItem): string {
   if (cveItem.sourceIdentifier) {
     let src = cveItem.sourceIdentifier;
     if (src.includes("@")) {
@@ -174,7 +190,7 @@ function getSource(cveItem) {
   return "NIST";
 }
 
-async function fetchAndParseFeed() {
+async function fetchAndParseFeed(): Promise<NvdFeed | null> {
   try {
     const response = await fetch(FEED_URL);
     if (!response.ok) {
@@ -186,7 +202,7 @@ async function fetchAndParseFeed() {
     const buffer = Buffer.from(arrayBuffer);
 
     const jsonStr = await gunzip(buffer);
-    const json = JSON.parse(jsonStr.toString());
+    const json = JSON.parse(jsonStr.toString()) as NvdFeed;
 
     return json;
   } catch (error) {
@@ -195,7 +211,7 @@ async function fetchAndParseFeed() {
   }
 }
 
-async function updateFeed() {
+export async function updateFeed(): Promise<void> {
   console.log(`[${new Date().toISOString()}] Updating feed...`);
   const json = await fetchAndParseFeed();
 
@@ -216,33 +232,31 @@ async function updateFeed() {
 
       if (score < CVSS_THRESHOLD) return null;
 
-      if (PRODUCT_FILTER && !matchesProductFilter(cve, PRODUCT_FILTER))
-        return null;
+      if (PRODUCT_FILTER && !matchesProductFilter(cve, PRODUCT_FILTER)) return null;
 
       const cveId = cve.id;
-      const pubDate = cve.published
-        ? new Date(cve.published).toUTCString()
-        : now;
+      const pubDate = cve.published ? new Date(cve.published).toUTCString() : now;
 
-      const descObj =
-        cve.descriptions && cve.descriptions.find((d) => d.lang === "en");
-      const description = descObj.value || "No description available";
+      const descObj = cve.descriptions?.find((d) => d.lang === "en");
+      const description = descObj?.value || "No description available";
 
       const safeDescription = escapeXml(description);
       const source = getSource(cve);
+      const products = escapeXml(getProducts(cve, description));
 
       const title = `${cveId} (CVSS ${score}) – ${description.substring(0, 50)}${description.length > 50 ? "..." : ""}`;
 
       return `  <item>
-    <title>${title}</title>
-    <author>${source}</author>
+    <title>${escapeXml(title)}</title>
+    <author>${escapeXml(source)}</author>
+    <category>${products}</category>
     <guid isPermaLink="false">${cveId}</guid>
     <link>https://nvd.nist.gov/vuln/detail/${cveId}</link>
     <description>${safeDescription} &lt;br/&gt;&lt;br/&gt;Max CVSS Score: ${score}</description>
     <pubDate>${pubDate}</pubDate>
   </item>`;
     })
-    .filter(Boolean)
+    .filter((item): item is string => item !== null)
     .join("\n");
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -263,17 +277,11 @@ ${items}
   );
 }
 
-function startTracking(intervalMinutes) {
-  updateFeed();
-  setInterval(updateFeed, intervalMinutes * 60 * 1000);
+export function startTracking(intervalMinutes: number): void {
+  void updateFeed();
+  setInterval(() => void updateFeed(), intervalMinutes * 60 * 1000);
 }
 
-function getRSS() {
+export function getRSS(): string {
   return currentRSS;
 }
-
-module.exports = {
-  startTracking,
-  getRSS,
-  FEED_URL,
-};
