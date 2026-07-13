@@ -1,7 +1,7 @@
 FROM node:26 AS build
 WORKDIR /app
-RUN npm install -g pnpm@11.12.0
 COPY package.json pnpm-lock.yaml ./
+RUN npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")"
 RUN pnpm install --prod --frozen-lockfile
 COPY . .
 
