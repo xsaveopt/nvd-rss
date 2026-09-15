@@ -1,38 +1,43 @@
-# NVD RSS Generator
+# nvd-rss
 
-A simple service that generates an RSS feed from the [National Vulnerability Database (NVD)](https://nvd.nist.gov/vuln/data-feeds) JSON 2.0 feeds. It filters vulnerabilities based on CVSS score and product names.
+A small web service that turns the [National Vulnerability Database](https://nvd.nist.gov/vuln/data-feeds) JSON 2.0 feed into an RSS feed you can follow in any reader.
+It downloads the gzipped feed on startup and again on a fixed interval, keeps every CVE whose highest CVSS base score across v3.1, v3.0 and v2 meets the threshold, and can narrow that down further to a single product.
+Each item links to the CVE's page on nvd.nist.gov, and the feed answers with a 503 until the first download has finished.
 
 ## Configuration
 
-The application is configured using environment variables.
+Everything is set through environment variables.
 
-| Variable                  | Default             | Description                                                                                              |
-| :------------------------ | :------------------ | :------------------------------------------------------------------------------------------------------- |
-| `CVSS_THRESHOLD`          | `8.0`               | Minimum CVSS base score to include in the feed.                                                          |
-| `PRODUCT_FILTER`          | `null`              | A string to filter vulnerabilities by product (e.g., "chrome", "windows"). Matches against CPE criteria. |
-| `UPDATE_INTERVAL_MINUTES` | `30`                | Frequency (in minutes) to check the NVD feed for updates.                                                |
-| `PORT`                    | `3000`              | The port the server listens on.                                                                          |
-| `RSS_PATH`                | `/rss`              | The URL path where the RSS feed is served.                                                               |
-| `NVD_FEED_URL`            | _(NVD Recent Feed)_ | The URL of the NVD JSON 2.0 GZ feed to consume.                                                          |
+| Variable                  | Default                                                             | Description                                                                                       |
+| :------------------------ | :------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------ |
+| `CVSS_THRESHOLD`          | `8.0`                                                               | Minimum CVSS base score for a CVE to appear in the feed.                                          |
+| `PRODUCT_FILTER`          | unset                                                               | Keeps only CVEs whose CPE criteria contain this text, case-insensitively, like chrome or windows. |
+| `UPDATE_INTERVAL_MINUTES` | `30`                                                                | How often the NVD feed is downloaded again.                                                       |
+| `PORT`                    | `3000`                                                              | Port the server listens on.                                                                       |
+| `RSS_PATH`                | `/rss`                                                              | Path the RSS feed is served at.                                                                   |
+| `NVD_FEED_URL`            | `https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-recent.json.gz` | Gzipped NVD JSON 2.0 feed to read from.                                                           |
 
-## Running the Project
+## Running
 
-### Local Development
+The container image is published to GitHub Container Registry as ghcr.io/xsaveopt/nvd-rss, tagged latest and by version for releases, and dev for the main branch.
 
-```bash
+```sh
+docker run -p 3000:3000 -e CVSS_THRESHOLD=9.0 ghcr.io/xsaveopt/nvd-rss:latest
+```
+
+Running from source needs Node 26 and pnpm, both pinned in mise.toml, since Node runs the TypeScript directly.
+
+```sh
 pnpm install
-pnpm start
+CVSS_THRESHOLD=9.0 PRODUCT_FILTER=windows pnpm start
 ```
 
-### With Configuration
+The image can also be built from the Dockerfile in the repo.
 
-```bash
-CVSS_THRESHOLD=9.0 PRODUCT_FILTER="windows" pnpm start
-```
-
-### Docker
-
-```bash
+```sh
 docker build -t nvd-rss .
-docker run -p 3000:3000 -e CVSS_THRESHOLD=9.0 nvd-rss
 ```
+
+## License
+
+GPL-2.0, see LICENSE.
