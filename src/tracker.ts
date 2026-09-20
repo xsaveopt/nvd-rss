@@ -46,7 +46,7 @@ interface NvdFeed {
 
 let currentRSS = "";
 
-function escapeXml(unsafe: string | undefined): string {
+export function escapeXml(unsafe: string | undefined): string {
   if (!unsafe) return "";
   return unsafe.replace(/[<>&'"]/g, (c) => {
     switch (c) {
@@ -90,7 +90,7 @@ function getHighestCvssScore(cveItem: CveItem): number {
   return maxScore;
 }
 
-function matchesProductFilter(cveItem: CveItem, filter: string): boolean {
+export function matchesProductFilter(cveItem: CveItem, filter: string): boolean {
   if (!cveItem.configurations) return false;
 
   const filterLower = filter.toLowerCase();
@@ -109,7 +109,7 @@ function matchesProductFilter(cveItem: CveItem, filter: string): boolean {
   return false;
 }
 
-function getProducts(cveItem: CveItem, description: string): string {
+export function getProducts(cveItem: CveItem, description: string): string {
   const candidates: string[] = [];
 
   if (description) {
@@ -174,7 +174,7 @@ function getProducts(cveItem: CveItem, description: string): string {
   return final.slice(0, 2).join(", ");
 }
 
-function getSource(cveItem: CveItem): string {
+export function getSource(cveItem: CveItem): string {
   if (cveItem.sourceIdentifier) {
     let src = cveItem.sourceIdentifier;
     if (src.includes("@")) {
