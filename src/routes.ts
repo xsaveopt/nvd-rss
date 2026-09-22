@@ -6,6 +6,15 @@ const router = express.Router();
 
 const rssPath = process.env.RSS_PATH || "/rss";
 
+router.get("/health", (_req: Request, res: Response) => {
+  res.set("Content-Type", "text/plain");
+  if (!getRSS()) {
+    res.status(503).send("degraded");
+    return;
+  }
+  res.send("up");
+});
+
 router.get(rssPath, (_req: Request, res: Response) => {
   try {
     const xml = getRSS();
