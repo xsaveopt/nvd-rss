@@ -6,7 +6,16 @@ const router = express.Router();
 
 const rssPath = process.env.RSS_PATH || "/rss";
 
-router.get("/health", (_req: Request, res: Response) => {
+export function deriveHealthPath(path: string): string {
+  const trimmed = path.replace(/\/+$/, "") || "/";
+  const lastSlash = trimmed.lastIndexOf("/");
+  const dir = lastSlash <= 0 ? "" : trimmed.slice(0, lastSlash);
+  return `${dir}/health`;
+}
+
+const healthPath = deriveHealthPath(rssPath);
+
+router.get(healthPath, (_req: Request, res: Response) => {
   res.set("Content-Type", "text/plain");
   if (!getRSS()) {
     res.status(503).send("degraded");
