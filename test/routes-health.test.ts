@@ -14,7 +14,7 @@ describe("GET /health", () => {
     const server = await listen(app);
 
     try {
-      const response = await fetch(`${server.url}/health`);
+      const response = await fetch(`${server.url}/rss/health`);
       const body = await response.text();
 
       assert.equal(response.status, 503);
@@ -36,11 +36,25 @@ describe("GET /health", () => {
     const server = await listen(app);
 
     try {
-      const response = await realFetch(`${server.url}/health`);
+      const response = await realFetch(`${server.url}/rss/health`);
       const body = await response.text();
 
       assert.equal(response.status, 200);
       assert.equal(body, "up");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not serve health at the root", async () => {
+    const app = express();
+    app.use("/", routes);
+    const server = await listen(app);
+
+    try {
+      const response = await fetch(`${server.url}/health`);
+
+      assert.equal(response.status, 404);
     } finally {
       await server.close();
     }

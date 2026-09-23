@@ -4,7 +4,7 @@ import express from "express";
 import type { RunningServer } from "./helpers.ts";
 import { listen } from "./helpers.ts";
 
-describe("GET /health with a subpathed RSS_PATH", () => {
+describe("GET /health with RSS_PATH=/blabla/rss", () => {
   let server: RunningServer;
 
   before(async () => {
@@ -21,15 +21,15 @@ describe("GET /health with a subpathed RSS_PATH", () => {
     delete process.env.RSS_PATH;
   });
 
-  it("serves health at the derived subpath", async () => {
-    const response = await fetch(`${server.url}/blabla/health`);
+  it("serves health under the full RSS_PATH", async () => {
+    const response = await fetch(`${server.url}/blabla/rss/health`);
     const body = await response.text();
 
     assert.equal(response.status, 503);
     assert.equal(body, "degraded");
   });
 
-  it("no longer serves health at the root", async () => {
+  it("does not serve health at the root", async () => {
     const response = await fetch(`${server.url}/health`);
 
     assert.equal(response.status, 404);

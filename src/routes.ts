@@ -7,10 +7,7 @@ const router = express.Router();
 const rssPath = process.env.RSS_PATH || "/rss";
 
 export function deriveHealthPath(path: string): string {
-  const trimmed = path.replace(/\/+$/, "") || "/";
-  const lastSlash = trimmed.lastIndexOf("/");
-  const dir = lastSlash <= 0 ? "" : trimmed.slice(0, lastSlash);
-  return `${dir}/health`;
+  return `${path.replace(/\/+$/, "")}/health`;
 }
 
 const healthPath = deriveHealthPath(rssPath);
