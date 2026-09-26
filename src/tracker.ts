@@ -179,7 +179,7 @@ export function getSource(cveItem: CveItem): string {
     let src = cveItem.sourceIdentifier;
     if (src.includes("@")) {
       const parts = src.split("@");
-      src = parts[1] || src;
+      src = parts[1] || parts[0];
     }
     const parts = src.split(".");
     if (parts.length >= 2) {
@@ -263,8 +263,8 @@ export async function updateFeed(): Promise<void> {
 <rss version="2.0">
 <channel>
   <title>NVD CVE Feed (CVSS >= ${CVSS_THRESHOLD})</title>
-  <link>${FEED_URL}</link>
-  <description>NVD Vulnerabilities with Score >= ${CVSS_THRESHOLD}${PRODUCT_FILTER ? ` (Product: ${PRODUCT_FILTER})` : ""}</description>
+  <link>${escapeXml(FEED_URL)}</link>
+  <description>NVD Vulnerabilities with Score >= ${CVSS_THRESHOLD}${PRODUCT_FILTER ? ` (Product: ${escapeXml(PRODUCT_FILTER)})` : ""}</description>
   <lastBuildDate>${now}</lastBuildDate>
   <language>en-US</language>
 ${items}

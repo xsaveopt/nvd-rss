@@ -51,10 +51,7 @@ describe("getSource", () => {
   });
 
   it("never leaks the separator when the domain part is empty", () => {
-    const source = getSource({ id: "CVE-1", sourceIdentifier: "cve@" });
-
-    assert.ok(source.length > 0);
-    assert.doesNotMatch(source, /@/);
+    assert.equal(getSource({ id: "CVE-1", sourceIdentifier: "cve@" }), "Cve");
   });
 });
 
