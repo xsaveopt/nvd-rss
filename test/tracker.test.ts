@@ -45,6 +45,17 @@ describe("getSource", () => {
   it("falls back to NIST when no identifier is present", () => {
     assert.equal(getSource({ id: "CVE-1" }), "NIST");
   });
+
+  it("uses the domain when the local part is empty", () => {
+    assert.equal(getSource({ id: "CVE-1", sourceIdentifier: "@mitre.org" }), "Mitre");
+  });
+
+  it("never leaks the separator when the domain part is empty", () => {
+    const source = getSource({ id: "CVE-1", sourceIdentifier: "cve@" });
+
+    assert.ok(source.length > 0);
+    assert.doesNotMatch(source, /@/);
+  });
 });
 
 describe("getProducts", () => {
@@ -163,6 +174,79 @@ describe("getProducts", () => {
 
   it("returns Unknown when nothing identifies a product", () => {
     assert.equal(getProducts({ id: "CVE-1" }, "A flaw was found."), "Unknown");
+  });
+
+  it("reads the theme name from a WordPress theme description", () => {
+    const description = "The Starter Blocks theme for WordPress is vulnerable to injection.";
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "Starter Blocks");
+  });
+
+  it("reads the product that opens a developed by description", () => {
+    const description = "WidgetShop developed by Acme has an authentication bypass.";
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "WidgetShop");
+  });
+
+  it("reads the product after vulnerability in and drops a leading the", () => {
+    const description = "A vulnerability in the Acme Router allows remote attackers to reboot it.";
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "Acme Router");
+  });
+
+  it("stops the vulnerability in product at a version keyword", () => {
+    const description = "A vulnerability in Widget Server version 2.1 exposes secrets.";
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "Widget Server");
+  });
+
+  it("stops the vulnerability in product at a full stop", () => {
+    const description = "There is a vulnerability in Acme Portal. Attackers can read files.";
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "Acme Portal");
+  });
+
+  it("stops the vulnerability in product at the end of the text", () => {
+    assert.equal(getProducts({ id: "CVE-1" }, "Found a vulnerability in Acme Hub"), "Acme Hub");
+  });
+
+  it("rejects a description candidate of fifty characters or more", () => {
+    const name = "A".repeat(50);
+    const description = `The ${name} plugin for WordPress is vulnerable.`;
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "Unknown");
+  });
+
+  it("rejects a description candidate that mentions vulnerability", () => {
+    const description = "The Vulnerability Scanner plugin for WordPress is vulnerable.";
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "Unknown");
+  });
+
+  it("orders description, GitHub and CPE candidates and keeps the first two", () => {
+    const cve = {
+      id: "CVE-1",
+      references: [{ url: "https://github.com/acme/widget-core/issues/1" }],
+      configurations: [
+        { nodes: [{ cpeMatch: [{ criteria: "cpe:2.3:a:acme:super_widget:1.0:*:*:*:*:*:*:*" }] }] },
+      ],
+    };
+    const description = "The Contact Form plugin for WordPress is vulnerable.";
+
+    assert.equal(getProducts(cve, description), "Contact Form, widget-core");
+  });
+
+  it("ignores references that are not a GitHub repository", () => {
+    const cve = {
+      id: "CVE-1",
+      references: [
+        { url: "https://example.test/advisory" },
+        { url: "https://github.com/acme" },
+        {},
+      ],
+    };
+
+    assert.equal(getProducts(cve, ""), "Unknown");
   });
 });
 
