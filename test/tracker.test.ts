@@ -73,7 +73,7 @@ describe("getProducts", () => {
       ],
     };
 
-    assert.equal(getProducts(cve, ""), "Super Widget, Other Thing");
+    assert.equal(getProducts(cve, ""), "Acme Super Widget, Acme Other Thing");
   });
 
   it("ignores CPE criteria with too few segments", () => {
@@ -104,7 +104,7 @@ describe("getProducts", () => {
       ],
     };
 
-    assert.equal(getProducts(cve, ""), "Alpha, Beta");
+    assert.equal(getProducts(cve, ""), "Acme Alpha, Acme Beta");
   });
 
   it("keeps a CPE product even when the node has no cpeMatch", () => {
@@ -119,7 +119,7 @@ describe("getProducts", () => {
       ],
     };
 
-    assert.equal(getProducts(cve, ""), "Lone Product");
+    assert.equal(getProducts(cve, ""), "Acme Lone Product");
   });
 
   it("prefers a named product from the description", () => {
@@ -155,7 +155,7 @@ describe("getProducts", () => {
       ],
     };
 
-    assert.equal(getProducts(cve, ""), "Widget");
+    assert.equal(getProducts(cve, ""), "Acme Widget");
   });
 
   it("keeps linux kernel when it is the only candidate", () => {
@@ -220,7 +220,7 @@ describe("getProducts", () => {
     assert.equal(getProducts({ id: "CVE-1" }, description), "Unknown");
   });
 
-  it("orders description, GitHub and CPE candidates and keeps the first two", () => {
+  it("prefers vulnerable CPE products over description and GitHub guesses", () => {
     const cve = {
       id: "CVE-1",
       references: [{ url: "https://github.com/acme/widget-core/issues/1" }],
@@ -230,7 +230,125 @@ describe("getProducts", () => {
     };
     const description = "The Contact Form plugin for WordPress is vulnerable.";
 
-    assert.equal(getProducts(cve, description), "Contact Form, widget-core");
+    assert.equal(getProducts(cve, description), "Acme Super Widget");
+  });
+
+  it("prefers the description over a GitHub repository", () => {
+    const cve = { id: "CVE-1", references: [{ url: "https://github.com/acme/widget-core" }] };
+
+    assert.equal(getProducts(cve, "A flaw was found in libwidget."), "libwidget");
+  });
+
+  it("skips GitHub advisory and security repositories", () => {
+    const cve = {
+      id: "CVE-1",
+      references: [
+        { url: "https://github.com/advisories/GHSA-xxxx" },
+        { url: "https://github.com/acme/security-advisories/blob/main/a.md" },
+        { url: "https://github.com/acme/widget-core/pull/2" },
+      ],
+    };
+
+    assert.equal(getProducts(cve, ""), "widget-core");
+  });
+
+  it("uses platform CPE entries only when nothing else names a product", () => {
+    const cve = {
+      id: "CVE-1",
+      configurations: [
+        {
+          nodes: [
+            {
+              cpeMatch: [
+                { vulnerable: false, criteria: "cpe:2.3:o:microsoft:windows:-:*:*:*:*:*:*:*" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    assert.equal(getProducts(cve, "Acme Agent before 2.1 allows code execution."), "Acme Agent");
+    assert.equal(getProducts(cve, ""), "Microsoft Windows");
+  });
+
+  for (const [description, product] of [
+    [
+      "A weakness has been identified in Acme SurfBoard up to 2.0.3. The element is",
+      "Acme SurfBoard",
+    ],
+    ["A flaw was found in libwidget. The parser reads past the end.", "libwidget"],
+    ["Widgetd before 2.1.31 contains an OS command injection.", "Widgetd"],
+    [
+      "Acme Gateway (AG) Policy Manager, versions prior to 5.34, contains a flaw.",
+      "Acme Gateway (AG) Policy Manager",
+    ],
+    [
+      "Use after free in Aura in Acme Browser prior to 154.0.8 allowed a remote attacker.",
+      "Acme Browser",
+    ],
+    [
+      "Incorrect calculation in API in Acme Browser on on Windows prior to 155.0 allowed it.",
+      "Acme Browser",
+    ],
+    [
+      "Unauthenticated SQL Injection in Acme Members Premium <= 7.8 versions.",
+      "Acme Members Premium",
+    ],
+    [
+      "Flatstore is an open source file storage library for PHP. Prior to 3.35.3 it fails.",
+      "Flatstore",
+    ],
+    ["simple-widget, an interface for running widgets, enables injection.", "simple-widget"],
+    [
+      "Use-after-free in the Widget component. This vulnerability was fixed in Acmefox ESR 153.4.",
+      "Acmefox ESR",
+    ],
+    [
+      "The Acme GPU Display Driver for Linux contains a vulnerability in the driver.",
+      "Acme GPU Display Driver for Linux",
+    ],
+    [
+      "Uncontrolled Recursion in Acmesearch can allow an authenticated user to crash it.",
+      "Acmesearch",
+    ],
+    [
+      "In the Linux kernel, the following vulnerability has been resolved: mmc: fix it.",
+      "Linux kernel",
+    ],
+    [
+      "The Acme Fusion Lite WordPress plugin before 3.48.0 does not check capabilities.",
+      "Acme Fusion Lite",
+    ],
+    [
+      "The Super Forms – Drag & Drop Form Builder plugin for WordPress is vulnerable.",
+      "Super Forms",
+    ],
+    ["In sshd in AcmeSSH before 10.6, the restrict keyword was ignored.", "AcmeSSH"],
+    ["Acmesoft has discovered a stored XSS vulnerability.", "Unknown"],
+    ["Profile import crash in 4.6.0 to 4.6.8 allows denial of service.", "Unknown"],
+    [
+      "On affected versions of Acme Portal (on-premises) or Acme Sensor, a path traversal exists.",
+      "Acme Portal",
+    ],
+    ["On affected devices the web server allows code execution.", "Unknown"],
+    [
+      "A vulnerability in the API endpoint of Acme Instant APs could allow an attacker to read files.",
+      "Acme Instant APs",
+    ],
+    ["A vulnerability in the kernel mode layer where a user can crash it.", "Unknown"],
+    ["widgetdb is a research data system developed by Acme. Prior to 2.0 it leaks.", "Unknown"],
+  ]) {
+    it(`reads ${product} from "${description.slice(0, 40)}..."`, () => {
+      assert.equal(getProducts({ id: "CVE-1" }, description), product);
+    });
+  }
+
+  it("never reads all from an in all versions phrase", () => {
+    const description =
+      "The Very Long Appointment Booking Plugin Name That Keeps Going Forever for WordPress plugin for WordPress is vulnerable in all versions up to 5.7.0.";
+
+    assert.equal(getProducts({ id: "CVE-1" }, description), "Unknown");
   });
 
   it("ignores references that are not a GitHub repository", () => {
@@ -301,10 +419,10 @@ describe("updateFeed", () => {
     await updateFeed();
 
     const rss = getRSS();
-    assert.match(rss, /<rss version="2\.0">/);
+    assert.match(rss, /<rss version="2\.0" xmlns:dc="http:\/\/purl\.org\/dc\/elements\/1\.1\/">/);
     assert.match(rss, /CVE-2026-0001/);
-    assert.match(rss, /CVSS 9\.8/);
-    assert.match(rss, /<author>Mitre<\/author>/);
+    assert.match(rss, /Critical 9\.8/);
+    assert.match(rss, /<dc:creator>Mitre<\/dc:creator>/);
     assert.match(rss, /<link>https:\/\/nvd\.nist\.gov\/vuln\/detail\/CVE-2026-0001<\/link>/);
   });
 

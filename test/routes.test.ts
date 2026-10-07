@@ -47,7 +47,7 @@ describe("GET /rss", () => {
 
       assert.equal(response.status, 200);
       assert.match(response.headers.get("content-type") ?? "", /application\/rss\+xml/);
-      assert.match(body, /<rss version="2\.0">/);
+      assert.match(body, /<rss version="2\.0" /);
       assert.match(body, /CVE-2026-0001/);
     } finally {
       await server.close();

@@ -1,6 +1,7 @@
 import express from "express";
 import type { Request, Response } from "express";
-import { getRSS } from "./tracker.ts";
+import { renderGroupPage } from "./page.ts";
+import { getGroup, getRSS } from "./tracker.ts";
 
 const router = express.Router();
 
@@ -10,7 +11,18 @@ export function deriveHealthPath(path: string): string {
   return `${path.replace(/\/+$/, "")}/health`;
 }
 
+export function deriveGroupPath(path: string): string {
+  return `${path.replace(/\/+$/, "")}/group/:id`;
+}
+
 const healthPath = deriveHealthPath(rssPath);
+const groupPath = deriveGroupPath(rssPath);
+
+function linkPrefix(req: Request): string {
+  const proto = req.get("x-forwarded-proto")?.split(",")[0].trim() || req.protocol;
+  const host = req.get("x-forwarded-host")?.split(",")[0].trim() || req.get("host") || "";
+  return host ? `${proto}://${host}${rssPath.replace(/\/+$/, "")}` : rssPath.replace(/\/+$/, "");
+}
 
 router.get(healthPath, (_req: Request, res: Response) => {
   res.set("Content-Type", "text/plain");
@@ -21,9 +33,19 @@ router.get(healthPath, (_req: Request, res: Response) => {
   res.send("up");
 });
 
-router.get(rssPath, (_req: Request, res: Response) => {
+router.get(groupPath, (req: Request, res: Response) => {
+  const group = getGroup(String(req.params.id));
+  if (!group) {
+    res.status(404).set("Content-Type", "text/plain").send("No such group in the current feed.");
+    return;
+  }
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.send(renderGroupPage(group));
+});
+
+router.get(rssPath, (req: Request, res: Response) => {
   try {
-    const xml = getRSS();
+    const xml = getRSS(linkPrefix(req));
     if (!xml) {
       res.status(503).send("RSS feed not ready yet. Please try again in a moment.");
       return;

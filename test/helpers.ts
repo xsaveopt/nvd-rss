@@ -46,6 +46,19 @@ export function mockFeed(feed: unknown) {
   return mockBody(gzipSync(Buffer.from(JSON.stringify(feed))));
 }
 
+export function sourcesPage(sources: unknown[], totalResults = sources.length) {
+  return { ok: true, json: async () => ({ totalResults, sources }) };
+}
+
+export function mockNvd(feed: unknown, sources: unknown[]) {
+  const body = toArrayBuffer(gzipSync(Buffer.from(JSON.stringify(feed))));
+  return mock.method(globalThis, "fetch", async (url: string) =>
+    String(url).includes("/rest/json/source/")
+      ? (sourcesPage(sources) as unknown as Response)
+      : ({ ok: true, arrayBuffer: async () => body } as unknown as Response),
+  );
+}
+
 export function mockNotOk(statusText: string) {
   return respondWith({ ok: false, statusText });
 }

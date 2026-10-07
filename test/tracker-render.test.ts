@@ -51,7 +51,7 @@ describe("CVSS scoring in the feed", () => {
 
     const item = itemFor(rss, "CVE-2026-2001");
     assert.ok(item);
-    assert.match(tagIn(item, "title") ?? "", /\(CVSS 8\.6\)/);
+    assert.match(tagIn(item, "title") ?? "", /^\[8\.6\] A flaw\.$/);
   });
 
   it("uses a CVSS v2 score when it is the only one", async () => {
@@ -61,7 +61,7 @@ describe("CVSS scoring in the feed", () => {
 
     const item = itemFor(rss, "CVE-2026-2002");
     assert.ok(item);
-    assert.match(tagIn(item, "title") ?? "", /\(CVSS 10\)/);
+    assert.match(tagIn(item, "title") ?? "", /^\[10\] /);
   });
 
   it("reports the highest score across every version and metric", async () => {
@@ -75,8 +75,8 @@ describe("CVSS scoring in the feed", () => {
 
     const item = itemFor(rss, "CVE-2026-2003");
     assert.ok(item);
-    assert.match(tagIn(item, "title") ?? "", /\(CVSS 9\.3\)/);
-    assert.match(tagIn(item, "description") ?? "", /Max CVSS Score: 9\.3$/);
+    assert.match(tagIn(item, "title") ?? "", /^\[9\.3\] /);
+    assert.match(tagIn(item, "description") ?? "", /Critical 9\.3 \(CVSS 3\.0\)/);
   });
 
   it("ignores metrics that carry no base score", async () => {
@@ -88,7 +88,7 @@ describe("CVSS scoring in the feed", () => {
 
     const item = itemFor(rss, "CVE-2026-2004");
     assert.ok(item);
-    assert.match(tagIn(item, "title") ?? "", /\(CVSS 8\.2\)/);
+    assert.match(tagIn(item, "title") ?? "", /^\[8\.2\] /);
   });
 
   it("drops CVEs without any metrics", async () => {
@@ -141,8 +141,8 @@ describe("item rendering", () => {
 
   const high = { cvssMetricV31: [{ cvssData: { baseScore: 9.0 } }] };
 
-  it("keeps a description of exactly fifty characters whole in the title", async () => {
-    const text = "x".repeat(50);
+  it("keeps a description of eighty characters whole in the title", async () => {
+    const text = "x".repeat(80);
     const rss = await render({
       id: "CVE-2026-3001",
       descriptions: [{ lang: "en", value: text }],
@@ -151,11 +151,11 @@ describe("item rendering", () => {
 
     const item = itemFor(rss, "CVE-2026-3001");
     assert.ok(item);
-    assert.equal(tagIn(item, "title"), `CVE-2026-3001 (CVSS 9) – ${text}`);
+    assert.equal(tagIn(item, "title"), `[9] ${text}`);
   });
 
-  it("cuts a longer description to fifty characters and adds an ellipsis", async () => {
-    const text = `${"a".repeat(50)}bcdef`;
+  it("cuts a longer description at a word boundary and adds an ellipsis", async () => {
+    const text = `${"word ".repeat(17)}tail of the text`;
     const rss = await render({
       id: "CVE-2026-3002",
       descriptions: [{ lang: "en", value: text }],
@@ -164,8 +164,8 @@ describe("item rendering", () => {
 
     const item = itemFor(rss, "CVE-2026-3002");
     assert.ok(item);
-    assert.equal(tagIn(item, "title"), `CVE-2026-3002 (CVSS 9) – ${"a".repeat(50)}...`);
-    assert.match(tagIn(item, "description") ?? "", new RegExp(`^${text} `));
+    assert.equal(tagIn(item, "title"), `[9] ${"word ".repeat(15)}word...`);
+    assert.match(tagIn(item, "description") ?? "", new RegExp(`&lt;p&gt;${text}&lt;/p&gt;`));
   });
 
   it("uses the published date as pubDate", async () => {
@@ -204,8 +204,8 @@ describe("item rendering", () => {
 
     const item = itemFor(rss, "CVE-2026-3005");
     assert.ok(item);
-    assert.equal(tagIn(item, "title"), "CVE-2026-3005 (CVSS 9) – No description available");
-    assert.match(tagIn(item, "description") ?? "", /^No description available /);
+    assert.equal(tagIn(item, "title"), "[9] No description available");
+    assert.match(tagIn(item, "description") ?? "", /&lt;p&gt;No description available&lt;\/p&gt;/);
     assert.doesNotMatch(item, /Una falla/);
   });
 
@@ -214,7 +214,7 @@ describe("item rendering", () => {
 
     const item = itemFor(rss, "CVE-2026-3006");
     assert.ok(item);
-    assert.match(tagIn(item, "description") ?? "", /^No description available /);
+    assert.match(tagIn(item, "description") ?? "", /&lt;p&gt;No description available&lt;\/p&gt;/);
   });
 
   it("puts the escaped product names in the category", async () => {
@@ -222,14 +222,11 @@ describe("item rendering", () => {
       id: "CVE-2026-3007",
       descriptions: [{ lang: "en", value: "The Foo & Bar plugin for WordPress is vulnerable." }],
       metrics: high,
-      configurations: [
-        { nodes: [{ cpeMatch: [{ criteria: "cpe:2.3:a:acme:super_widget:1.0:*:*:*:*:*:*:*" }] }] },
-      ],
     });
 
     const item = itemFor(rss, "CVE-2026-3007");
     assert.ok(item);
-    assert.equal(tagIn(item, "category"), "Foo &amp; Bar, Super Widget");
+    assert.equal(tagIn(item, "category"), "Foo &amp; Bar");
   });
 
   it("puts Unknown in the category when no product is found", async () => {
@@ -242,5 +239,45 @@ describe("item rendering", () => {
     const item = itemFor(rss, "CVE-2026-3008");
     assert.ok(item);
     assert.equal(tagIn(item, "category"), "Unknown");
+  });
+
+  it("leads the title and description with the product", async () => {
+    const rss = await render({
+      id: "CVE-2026-3009",
+      sourceIdentifier: "security@acme.test",
+      descriptions: [{ lang: "en", value: "Acme Router before 2.1 allows remote code execution." }],
+      metrics: { cvssMetricV31: [{ cvssData: { baseScore: 9.8 } }] },
+      weaknesses: [
+        { description: [{ lang: "en", value: "CWE-78" }] },
+        {
+          description: [
+            { lang: "en", value: "NVD-CWE-noinfo" },
+            { lang: "en", value: "CWE-78" },
+          ],
+        },
+      ],
+      references: [
+        { url: "https://acme.test/a?x=1&y=2" },
+        { url: "https://acme.test/b" },
+        { url: "https://acme.test/c" },
+        { url: "https://acme.test/d" },
+      ],
+    });
+
+    const item = itemFor(rss, "CVE-2026-3009");
+    assert.ok(item);
+    assert.equal(
+      tagIn(item, "title"),
+      "[9.8] Acme Router: Acme Router before 2.1 allows remote code execution.",
+    );
+    assert.equal(tagIn(item, "dc:creator"), "Acme");
+    const description = tagIn(item, "description") ?? "";
+    assert.match(
+      description,
+      /^&lt;p&gt;&lt;strong&gt;Acme Router&lt;\/strong&gt; · Critical 9\.8 \(CVSS 3\.1\) · CWE-78 · Acme&lt;\/p&gt;/,
+    );
+    assert.match(description, /href=&quot;https:\/\/acme\.test\/a\?x=1&amp;amp;y=2&quot;/);
+    assert.match(description, /acme\.test\/c/);
+    assert.doesNotMatch(description, /acme\.test\/d/);
   });
 });

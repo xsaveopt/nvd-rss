@@ -3,6 +3,9 @@
 A small web service that turns the [National Vulnerability Database](https://nvd.nist.gov/vuln/data-feeds) JSON 2.0 feed into an RSS feed you can follow in any reader.
 It downloads the gzipped feed on startup and again on a fixed interval, keeps every CVE whose highest CVSS base score across v3.1, v3.0 and v2 meets the threshold, and can narrow that down further to a single product.
 Each item links to the CVE's page on nvd.nist.gov, and the feed answers with a 503 until the first download has finished.
+Items lead with the affected product, read from the NVD configurations or the description, and looked up on the CVE.org record when neither names it.
+CVEs published on the same day by the same organisation for the same product are folded into one item, which links to a page under the feed path, like /rss/group/{id}, that lists each CVE with its score and what sets it apart.
+Authors are the names of the organisations that published each CVE, taken from the NVD source api once a day.
 
 ## Configuration
 

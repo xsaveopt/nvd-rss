@@ -1,5 +1,12 @@
 import zlib from "node:zlib";
 import { promisify } from "node:util";
+import { affectedProducts, resolveProducts } from "./cveorg.ts";
+import { buildGroups, isGroup } from "./groups.ts";
+import type { Entry, Group } from "./groups.ts";
+import { refreshSources, sourceName } from "./sources.ts";
+import { escapeXml, summarize } from "./text.ts";
+
+export { escapeXml, summarize };
 
 const gunzip = promisify(zlib.gunzip);
 
@@ -9,12 +16,15 @@ export const FEED_URL =
 const CVSS_THRESHOLD = Number.parseFloat(process.env.CVSS_THRESHOLD || "8.0");
 const PRODUCT_FILTER = process.env.PRODUCT_FILTER || null;
 
+const MAX_REFERENCES = 3;
+
 interface CvssMetric {
   cvssData?: { baseScore?: number };
 }
 
 interface CpeMatch {
   criteria?: string;
+  vulnerable?: boolean;
 }
 
 interface ConfigNode {
@@ -32,6 +42,7 @@ interface CveItem {
   descriptions?: { lang: string; value: string }[];
   references?: { url?: string }[];
   configurations?: Configuration[];
+  weaknesses?: { description?: { lang: string; value: string }[] }[];
   metrics?: {
     cvssMetricV31?: CvssMetric[];
     cvssMetricV30?: CvssMetric[];
@@ -44,50 +55,47 @@ interface NvdFeed {
   vulnerabilities?: { cve?: CveItem }[];
 }
 
-let currentRSS = "";
-
-export function escapeXml(unsafe: string | undefined): string {
-  if (!unsafe) return "";
-  return unsafe.replace(/[<>&'"]/g, (c) => {
-    switch (c) {
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case "&":
-        return "&amp;";
-      case "'":
-        return "&apos;";
-      case '"':
-        return "&quot;";
-      default:
-        return c;
-    }
-  });
+interface CvssScore {
+  score: number;
+  version: string;
 }
 
-function getHighestCvssScore(cveItem: CveItem): number {
-  let maxScore = 0.0;
+export const LINK_PREFIX = "\u0000prefix\u0000";
 
-  if (!cveItem.metrics) return 0.0;
+let currentRSS = "";
+let currentGroups = new Map<string, Group>();
 
-  const groups = [
-    cveItem.metrics.cvssMetricV31,
-    cveItem.metrics.cvssMetricV30,
-    cveItem.metrics.cvssMetricV2,
+function getHighestCvss(cveItem: CveItem): CvssScore {
+  const best: CvssScore = { score: 0.0, version: "" };
+
+  if (!cveItem.metrics) return best;
+
+  const groups: [string, CvssMetric[] | undefined][] = [
+    ["3.1", cveItem.metrics.cvssMetricV31],
+    ["3.0", cveItem.metrics.cvssMetricV30],
+    ["2.0", cveItem.metrics.cvssMetricV2],
   ];
 
-  for (const group of groups) {
+  for (const [version, group] of groups) {
     if (!group) continue;
     for (const metric of group) {
       const score = metric.cvssData?.baseScore;
-      if (score !== undefined && score > maxScore) {
-        maxScore = score;
+      if (score !== undefined && score > best.score) {
+        best.score = score;
+        best.version = version;
       }
     }
   }
 
-  return maxScore;
+  return best;
+}
+
+export function getSeverity(score: number): string {
+  if (score >= 9.0) return "Critical";
+  if (score >= 7.0) return "High";
+  if (score >= 4.0) return "Medium";
+  if (score > 0) return "Low";
+  return "None";
 }
 
 export function matchesProductFilter(cveItem: CveItem, filter: string): boolean {
@@ -109,74 +117,136 @@ export function matchesProductFilter(cveItem: CveItem, filter: string): boolean 
   return false;
 }
 
-export function getProducts(cveItem: CveItem, description: string): string {
-  const candidates: string[] = [];
+function titleCase(value: string): string {
+  return value
+    .replace(/\\(.)/g, "$1")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-  if (description) {
-    const patterns = [
-      /The\s+(.+?)\s+plugin\s+for\s+WordPress/i,
-      /The\s+(.+?)\s+theme\s+for\s+WordPress/i,
-      /^(.+?)\s+developed\s+by/i,
-      /\bvulnerability in\s+(?:the\s+)?(.+?)(?:\s+(?:allows|version|before|prior|is|has)|\.|$)/i,
-    ];
+export function formatCpeProduct(vendor: string, product: string): string {
+  const v = titleCase(vendor);
+  const p = titleCase(product);
+  if (!v || v === "*" || v === "-" || p.toLowerCase().startsWith(v.toLowerCase())) return p;
+  return `${v} ${p}`;
+}
 
-    for (const pattern of patterns) {
-      const match = description.match(pattern);
-      if (match && match[1]) {
-        const p = match[1].trim();
-        if (p.length < 50 && !p.toLowerCase().includes("vulnerability")) {
-          candidates.push(p);
+function cpeProducts(cveItem: CveItem, vulnerable: boolean): string[] {
+  const products: string[] = [];
+  for (const config of cveItem.configurations ?? []) {
+    for (const node of config.nodes ?? []) {
+      for (const match of node.cpeMatch ?? []) {
+        if (!match.criteria || (match.vulnerable !== false) !== vulnerable) continue;
+        const parts = match.criteria.split(":");
+        if (parts.length >= 5) {
+          products.push(formatCpeProduct(parts[3], parts[4]));
         }
       }
     }
   }
+  return products;
+}
 
-  if (cveItem.references) {
-    for (const ref of cveItem.references) {
-      if (ref.url && ref.url.includes("github.com")) {
-        const match = ref.url.match(/github\.com\/([^/]+)\/([^/]+)/);
-        if (match && match[2]) {
-          candidates.push(match[2]);
-        }
-      }
+const VERSION_STOP = String.raw`(?:up\s+to|before|prior\s+to|prior\s+versions?|through|versions?\s|<=?\s*v?\d|v?\d+(?:\.\d+)+)`;
+const TOKEN = String.raw`[A-Z][\w\-/]*(?:\.[\w\-/]+)*`;
+const NAME = String.raw`${TOKEN}(?:\s+(?:for\s+|and\s+|of\s+)?${TOKEN}){0,5}`;
+const WORD = String.raw`[^\s,]*[^\s,.:;]`;
+
+const DESCRIPTION_PATTERNS = [
+  /^In the (Linux kernel)\b/,
+  new RegExp(String.raw`\baffected\s+versions?\s+of\s+(?:the\s+)?(${NAME})`),
+  /The\s+(.+?)\s+(?:plugin|theme|extension|module)\s+for\s+\w+/i,
+  /The\s+(.+?)\s+WordPress\s+(?:plugin|theme)/i,
+  /^(.+?)\s+developed\s+by/i,
+  new RegExp(
+    String.raw`^(?:an?\s+)?(?:[\w-]+\s+){0,3}?(?:vulnerability|flaw|weakness|issue)\s+(?:has\s+been|was|is)\s+(?:found|identified|detected|discovered|reported)\s+in\s+(?:the\s+)?(.+?)(?=\s+${VERSION_STOP}|\.(?:\s|$)|,|$)`,
+    "i",
+  ),
+  new RegExp(String.raw`^(?:The\s+)?(${NAME})\s+is\s+an?\s`),
+  /^([\w.-]+),\s+an?\s/,
+  new RegExp(
+    String.raw`\bin\s+(?:the\s+)?([\w][\w.\-/]*(?:\s+[A-Z][\w.\-/]*){0,4})(?:\s+(?:on|for)\s+(?:on\s+)?[A-Z]\w*)?\s+${VERSION_STOP}`,
+  ),
+  new RegExp(String.raw`^(?:In\s+)?(${WORD}(?:\s+${WORD}){0,6}?),?\s+${VERSION_STOP}`),
+  /\bfixed\s+in\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*?)\s+\d/,
+  new RegExp(
+    String.raw`^(?:The\s+)?(${NAME})\s+(?:contains|allows|exposes|has(?!\s+(?:discovered|identified|found|reported))|uses|accepts|fails|does\s+not|is\s+vulnerable)\b`,
+  ),
+  new RegExp(String.raw`\bin\s+(${NAME})\s+(?:can|could|may|allows?)\b`),
+  /\bvulnerability in\s+(?:the\s+)?(.+?)(?:\s+(?:allows|version|before|prior|is|has|could|up\s+to|through)|\.|$)/i,
+];
+
+const GENERIC_PRODUCT =
+  /^(?:the|this|there|a|an|in|on|it|all|application|affected|multiple|versions?)\b|\baffected$|\b(?:where|that|which|who|whose|its|is|are|was)\b|\s(?:in|of|for|on|to|from)$/i;
+
+function descriptionProduct(description: string): string | undefined {
+  const text = description.replace(/\s+/g, " ").trim();
+  for (const pattern of DESCRIPTION_PATTERNS) {
+    const match = text.match(pattern);
+    const p = match?.[1]
+      ?.split(/\s+[–-]\s+/)[0]
+      .split(/\s+in\s+/)
+      .pop()
+      ?.replace(/^the\s+/i, "")
+      .replace(
+        /^.*?\b(?:endpoint|component|interface|function|feature|service|layer)s?\s+of\s+(?:the\s+)?/i,
+        "",
+      )
+      .trim();
+    if (!p || p.length >= 50) continue;
+    if (p.toLowerCase().includes("vulnerability") || GENERIC_PRODUCT.test(p)) continue;
+    return p;
+  }
+  return undefined;
+}
+
+const NOT_A_PRODUCT_REPO = /security|advisor|cve|csaf|poc|exploit|vuln/i;
+
+function githubProducts(cveItem: CveItem): string[] {
+  const products: string[] = [];
+  for (const ref of cveItem.references ?? []) {
+    const match = ref.url?.match(/github\.com\/([^/]+)\/([^/#?]+)/);
+    if (match && match[1] !== "advisories" && match[2] && !NOT_A_PRODUCT_REPO.test(match[2])) {
+      products.push(match[2]);
     }
   }
+  return products;
+}
 
-  if (cveItem.configurations) {
-    for (const config of cveItem.configurations) {
-      if (!config.nodes) continue;
-      for (const node of config.nodes) {
-        if (!node.cpeMatch) continue;
-        for (const match of node.cpeMatch) {
-          if (match.criteria) {
-            const parts = match.criteria.split(":");
-            if (parts.length >= 5) {
-              const product = parts[4];
-              const formatted = product.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-              candidates.push(formatted);
-            }
-          }
-        }
-      }
-    }
-  }
-
+function pickProducts(candidates: string[]): string[] {
   const unique = [...new Set(candidates)];
-
   const filtered = unique.filter((p) => {
     const lower = p.toLowerCase();
     return lower !== "linux kernel" && lower !== "unknown";
   });
+  return (filtered.length > 0 ? filtered : unique).slice(0, 2);
+}
 
-  const final = filtered.length > 0 ? filtered : unique;
+export function getProducts(cveItem: CveItem, description: string): string {
+  const fromDescription = description ? descriptionProduct(description) : undefined;
+  const tiers = [
+    cpeProducts(cveItem, true),
+    fromDescription ? [fromDescription] : [],
+    githubProducts(cveItem),
+    cpeProducts(cveItem, false),
+  ];
 
-  if (final.length === 0) return "Unknown";
-  return final.slice(0, 2).join(", ");
+  for (const tier of tiers) {
+    const picked = pickProducts(tier);
+    if (picked.length > 0) return picked.join(", ");
+  }
+  return "Unknown";
 }
 
 export function getSource(cveItem: CveItem): string {
   if (cveItem.sourceIdentifier) {
+    const named = sourceName(cveItem.sourceIdentifier);
+    if (named) return named;
+
     let src = cveItem.sourceIdentifier;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(src)) {
+      return "Unknown";
+    }
     if (src.includes("@")) {
       const parts = src.split("@");
       src = parts[1] || parts[0];
@@ -188,6 +258,14 @@ export function getSource(cveItem: CveItem): string {
     return src.charAt(0).toUpperCase() + src.slice(1);
   }
   return "NIST";
+}
+
+function getWeaknesses(cveItem: CveItem): string[] {
+  const ids = (cveItem.weaknesses ?? [])
+    .flatMap((w) => w.description ?? [])
+    .map((d) => d.value)
+    .filter((v) => /^CWE-\d+$/.test(v));
+  return [...new Set(ids)];
 }
 
 async function fetchAndParseFeed(): Promise<NvdFeed | null> {
@@ -211,6 +289,109 @@ async function fetchAndParseFeed(): Promise<NvdFeed | null> {
   }
 }
 
+interface Selected {
+  cve: CveItem;
+  cvss: CvssScore;
+  description: string;
+  products: string;
+}
+
+function toEntry({ cve, cvss, description, products }: Selected): Entry {
+  return {
+    id: cve.id,
+    score: cvss.score,
+    version: cvss.version,
+    severity: getSeverity(cvss.score),
+    description,
+    products,
+    source: getSource(cve),
+    weaknesses: getWeaknesses(cve),
+    references: (cve.references ?? [])
+      .map((r) => r.url)
+      .filter((url): url is string => Boolean(url)),
+    published: cve.published,
+  };
+}
+
+function pubDateOf(published: string | undefined, now: string): string {
+  return published ? new Date(published).toUTCString() : now;
+}
+
+function renderItem(entry: Entry, now: string): string {
+  const known = entry.products !== "Unknown";
+  const severity = `${entry.severity} ${entry.score}`;
+
+  const title = known
+    ? `[${entry.score}] ${entry.products}: ${summarize(entry.description)}`
+    : `[${entry.score}] ${summarize(entry.description)}`;
+
+  const facts = [
+    known ? `<strong>${escapeXml(entry.products)}</strong>` : "",
+    `${severity} (CVSS ${entry.version})`,
+    ...entry.weaknesses,
+    escapeXml(entry.source),
+  ].filter(Boolean);
+
+  const references = entry.references
+    .slice(0, MAX_REFERENCES)
+    .map((url) => `<a href="${escapeXml(url)}">${escapeXml(url)}</a>`);
+
+  const html = [
+    `<p>${facts.join(" · ")}</p>`,
+    `<p>${escapeXml(entry.description)}</p>`,
+    references.length > 0 ? `<p>${references.join("<br/>")}</p>` : "",
+  ].join("");
+
+  return `  <item>
+    <title>${escapeXml(title)}</title>
+    <dc:creator>${escapeXml(entry.source)}</dc:creator>
+    <category>${escapeXml(entry.products)}</category>
+    <guid isPermaLink="false">${entry.id}</guid>
+    <link>https://nvd.nist.gov/vuln/detail/${entry.id}</link>
+    <description>${escapeXml(html)}</description>
+    <pubDate>${pubDateOf(entry.published, now)}</pubDate>
+  </item>`;
+}
+
+function renderGroup(group: Group, now: string): string {
+  const top = group.entries[0];
+  const count = group.entries.length;
+  const page = `${LINK_PREFIX}/group/${group.id}`;
+  const latest = group.entries
+    .map((e) => e.published ?? "")
+    .sort()
+    .at(-1);
+
+  const facts = [
+    `<strong>${escapeXml(group.products)}</strong>`,
+    `${count} vulnerabilities`,
+    `highest ${top.severity} ${top.score}`,
+    escapeXml(group.source),
+  ];
+
+  const rows = group.entries.map(
+    (e) =>
+      `<li><a href="https://nvd.nist.gov/vuln/detail/${e.id}">${e.id}</a> [${e.score}] ${escapeXml(e.reason)}</li>`,
+  );
+
+  const html = [
+    `<p>${facts.join(" · ")}</p>`,
+    group.shared ? `<p>${escapeXml(group.shared)} ...</p>` : "",
+    `<ul>${rows.join("")}</ul>`,
+    `<p><a href="${page}">All ${count} on one page</a></p>`,
+  ].join("");
+
+  return `  <item>
+    <title>${escapeXml(`[${top.score}] ${group.products}: ${count} vulnerabilities`)}</title>
+    <dc:creator>${escapeXml(group.source)}</dc:creator>
+    <category>${escapeXml(group.products)}</category>
+    <guid isPermaLink="false">group-${group.id}</guid>
+    <link>${page}</link>
+    <description>${escapeXml(html)}</description>
+    <pubDate>${pubDateOf(latest || undefined, now)}</pubDate>
+  </item>`;
+}
+
 export async function updateFeed(): Promise<void> {
   console.log(`[${new Date().toISOString()}] Updating feed...`);
   const json = await fetchAndParseFeed();
@@ -223,65 +404,69 @@ export async function updateFeed(): Promise<void> {
   const now = new Date().toUTCString();
   const timestamp = json.timestamp;
 
-  const items = json.vulnerabilities
-    .map((item) => {
+  const selected = json.vulnerabilities
+    .map((item): Selected | null => {
       const cve = item.cve;
       if (!cve) return null;
 
-      const score = getHighestCvssScore(cve);
+      const cvss = getHighestCvss(cve);
 
-      if (score < CVSS_THRESHOLD) return null;
+      if (cvss.score < CVSS_THRESHOLD) return null;
 
       if (PRODUCT_FILTER && !matchesProductFilter(cve, PRODUCT_FILTER)) return null;
-
-      const cveId = cve.id;
-      const pubDate = cve.published ? new Date(cve.published).toUTCString() : now;
 
       const descObj = cve.descriptions?.find((d) => d.lang === "en");
       const description = descObj?.value || "No description available";
 
-      const safeDescription = escapeXml(description);
-      const source = getSource(cve);
-      const products = escapeXml(getProducts(cve, description));
-
-      const title = `${cveId} (CVSS ${score}) – ${description.substring(0, 50)}${description.length > 50 ? "..." : ""}`;
-
-      return `  <item>
-    <title>${escapeXml(title)}</title>
-    <author>${escapeXml(source)}</author>
-    <category>${products}</category>
-    <guid isPermaLink="false">${cveId}</guid>
-    <link>https://nvd.nist.gov/vuln/detail/${cveId}</link>
-    <description>${safeDescription} &lt;br/&gt;&lt;br/&gt;Max CVSS Score: ${score}</description>
-    <pubDate>${pubDate}</pubDate>
-  </item>`;
+      return { cve, cvss, description, products: getProducts(cve, description) };
     })
-    .filter((item): item is string => item !== null)
-    .join("\n");
+    .filter((item): item is Selected => item !== null);
+
+  await resolveProducts(selected.filter((s) => s.products === "Unknown").map((s) => s.cve.id));
+
+  const entries = selected.map((s) =>
+    toEntry(
+      s.products === "Unknown" ? { ...s, products: affectedProducts(s.cve.id) ?? "Unknown" } : s,
+    ),
+  );
+  const grouped = buildGroups(entries);
+  const items = grouped.map((item) =>
+    isGroup(item) ? renderGroup(item, now) : renderItem(item, now),
+  );
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
 <channel>
   <title>NVD CVE Feed (CVSS >= ${CVSS_THRESHOLD})</title>
   <link>${escapeXml(FEED_URL)}</link>
   <description>NVD Vulnerabilities with Score >= ${CVSS_THRESHOLD}${PRODUCT_FILTER ? ` (Product: ${escapeXml(PRODUCT_FILTER)})` : ""}</description>
   <lastBuildDate>${now}</lastBuildDate>
   <language>en-US</language>
-${items}
+${items.join("\n")}
 </channel>
 </rss>`;
 
   currentRSS = xml;
+  currentGroups = new Map(grouped.filter(isGroup).map((g) => [g.id, g]));
   console.log(
-    `[${new Date().toISOString()}] Feed updated. Timestamp: ${timestamp}. Items: ${json.vulnerabilities.length}`,
+    `[${new Date().toISOString()}] Feed updated. Timestamp: ${timestamp}. Items: ${items.length} (${entries.length} CVEs) of ${json.vulnerabilities.length}`,
   );
 }
 
-export function startTracking(intervalMinutes: number): void {
-  void updateFeed();
-  setInterval(() => void updateFeed(), intervalMinutes * 60 * 1000);
+async function refresh(): Promise<void> {
+  await refreshSources();
+  await updateFeed();
 }
 
-export function getRSS(): string {
-  return currentRSS;
+export function startTracking(intervalMinutes: number): void {
+  void refresh();
+  setInterval(() => void refresh(), intervalMinutes * 60 * 1000);
+}
+
+export function getRSS(prefix = ""): string {
+  return currentRSS.replaceAll(LINK_PREFIX, prefix.replace(/[^\w.:/~%[\]-]/g, ""));
+}
+
+export function getGroup(id: string): Group | undefined {
+  return currentGroups.get(id);
 }
