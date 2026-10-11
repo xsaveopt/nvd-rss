@@ -44,6 +44,7 @@ interface CveItem {
   configurations?: Configuration[];
   weaknesses?: { description?: { lang: string; value: string }[] }[];
   metrics?: {
+    cvssMetricV40?: CvssMetric[];
     cvssMetricV31?: CvssMetric[];
     cvssMetricV30?: CvssMetric[];
     cvssMetricV2?: CvssMetric[];
@@ -71,6 +72,7 @@ function getHighestCvss(cveItem: CveItem): CvssScore {
   if (!cveItem.metrics) return best;
 
   const groups: [string, CvssMetric[] | undefined][] = [
+    ["4.0", cveItem.metrics.cvssMetricV40],
     ["3.1", cveItem.metrics.cvssMetricV31],
     ["3.0", cveItem.metrics.cvssMetricV30],
     ["2.0", cveItem.metrics.cvssMetricV2],
